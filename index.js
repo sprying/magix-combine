@@ -33,7 +33,9 @@ module.exports = {
             var ps = [];
             fd.walk(configs.tmplFolder, function(filepath) {
                 var from = filepath;
-                var to = from.replace(configs.tmplReg, configs.srcHolder);
+                //var to = from.replace(configs.tmplReg, configs.srcHolder);
+                var re = path.relative(process.cwd(), filepath)
+                var to = path.resolve(configs.srcFolder, '../', re)
                 ps.push(js.process(from, to));
             });
             Promise.all(ps).then(resolve);
