@@ -1,54 +1,114 @@
-let configs = require('./util-config');
-let md5 = require('./util-md5');
+/*
+    处理样式规则中的@规则
+ */
+let util = require('util');
+let regexp = require('./util-rcache');
+let {
+    genCssSelector
+} = require('./css-selector');
+let ruleEndReg = /[;\r\n]/;
+let trimQ = /^['"]|['"]$/g;
 //以@开始的名称，如@font-face
 //charset不处理，压缩器会自动处理
-let cssAtNamesKeyReg = /(?:^|[\s\}])@([a-z\-]+)\s*(?:[\w\-]+)?\{([^\{\}]*)\}/g;
+let fontfaceReg = /(?:^|[\s\}])@\s*font-face\s*\{([^\{\}]*)\}/g;
 //keyframes，如@-webkit-keyframes xx
-let cssKeyframesReg = /(^|[\s\}])(@(?:-webkit-|-moz-|-o-|-ms-)?keyframes)\s+(['"])?([\w\-]+)\3/g;
-let genCssContentReg = (key) => {
-    let reg = genCssContentReg[key];
-    if (!reg) {
-        reg = new RegExp(':\\s*([\'"])?' + key.replace(/[\-#$\^*()+\[\]{}|\\,.?\s]/g, '\\$&') + '\\1', 'g');
-        genCssContentReg[key] = reg;
-    }
-    return reg;
+let keyframesReg = /(^|[\s\}])(@(?:-webkit-|-moz-|-o-|-ms-)?keyframes)\s+(['"])?([\w\-]+)\3/g;
+//let fontFalilyReg = /font-family\s*:\s*(['"])?([\w\-\s$]+)\1/;
+let genCssContentReg = key => {
+    return regexp.get('\\b(font-family|animation|animation-name)\\s*:([^\\{\\}:\\r\\n\\(\\)]*?)([\'"])?' + regexp.escape(key) + '\\3(?=[,\\s;])', 'g');
+};
+let globalContents = {};
+let extractRules = fileContent => {
+    let rules = [];
+    fileContent.replace(keyframesReg, (m, head, keyframe, q, name) => {
+        if (rules.indexOf(name) == -1) {
+            rules.push(name);
+        }
+    }).replace(fontfaceReg, (match, content) => {
+        let rules = content.split(ruleEndReg);
+        for (let rule of rules) {
+            let parts = rule.split(':');
+            if (parts.length && parts[0].trim() === 'font-family') {
+                let fname = parts[1].trim();
+                fname = fname.replace(trimQ, '');
+                if (rules.indexOf(fname) == -1) {
+                    rules.push(fname);
+                }
+                break;
+            }
+        }
+    });
+    return rules;
 };
 //css @规则的处理
-module.exports = (fileContent, cssNamesKey) => {
+let processor = (fileContent, cssNamesKey, addToGlobal, gInfo) => {
     let contents = [];
     //先处理keyframes
-    fileContent = fileContent.replace(cssKeyframesReg, (m, head, keyframe, q, name) => {
+    fileContent = fileContent.replace(keyframesReg, (m, head, keyframe, q, name) => {
         //把名称保存下来，因为还要修改使用的地方
-        contents.push(name);
-        if (configs.compressCss && configs.compressCssSelectorNames) { //压缩，我们采用md5处理，同样的name要生成相同的key
-            if (name.length > configs.md5CssSelectorLen) {
-                name = md5(name, configs.md5CssSelectorLen);
-            }
+        if (contents.indexOf(name) == -1) {
+            contents.push(name);
         }
+        let tname = genCssSelector(name, cssNamesKey, gInfo.globalReservedMap, 'md5CssSelectorResult@rule');
+        q = q || '';
         //增加前缀
-        return head + keyframe + ' ' + cssNamesKey + '-' + name;
+        return head + keyframe + ' ' + q + tname + q;
     });
     //处理其它@规则，这里只处理了font-face
-    fileContent = fileContent.replace(cssAtNamesKeyReg, (match, key, content) => {
-        if (key == 'font-face') {
-            //font-face只处理font-family
-            let m = content.match(/font-family\s*:\s*(['"])?([\w\-]+)\1/);
-            if (m) {
-                //同样保存下来，要修改使用的地方
-                contents.push(m[2]);
+    fileContent.replace(fontfaceReg, (match, content) => {
+        //if (key == 'font-face') {
+        //font-face只处理font-family font-family名称只要用引号引起，几乎可以用任意字符
+        //fontFalilyReg.lastIndex = 0;
+        //let m = content.match(fontFalilyReg);
+        //if (m) {
+        //    //同样保存下来，要修改使用的地方
+        //    contents.push(m[2]);
+        //}
+        //}
+        let rules = content.split(ruleEndReg);
+        for (let rule of rules) {
+            let parts = rule.split(':');
+            if (parts.length && parts[0].trim() === 'font-family') {
+                let fname = parts[1].trim();
+                fname = fname.replace(trimQ, '');
+                if (contents.indexOf(fname) == -1) {
+                    contents.push(fname);
+                }
+                break;
             }
         }
-        return match;
     });
-    while (contents.length) {
-        let t = contents.pop();
-        let reg = genCssContentReg(t);
-        if (configs.compressCss && configs.compressCssSelectorNames) { //压缩，我们采用md5处理，同样的name要生成相同的key
-            if (t.length > configs.md5CssSelectorLen) {
-                t = md5(t, configs.md5CssSelectorLen);
+    for (let p in globalContents) {
+        if (globalContents.hasOwnProperty(p)) {
+            if (contents.indexOf(p) == -1) {
+                contents.push({
+                    t: p,
+                    tn: globalContents[p]
+                });
             }
         }
-        fileContent = fileContent.replace(reg, ':$1' + cssNamesKey + '-' + t + '$1');
     }
+    //contents中目前只有@font-face及@keyframes2种
+    while (contents.length) {
+        let t = contents.pop(),
+            reg, tn;
+        if (util.isString(t)) {
+            reg = genCssContentReg(t);
+            tn = genCssSelector(t, cssNamesKey, gInfo.globalReservedMap, 'md5CssSelectorResult@rule');
+            if (addToGlobal) {
+                globalContents[t] = tn;
+            }
+        } else {
+            reg = genCssContentReg(t.t);
+            tn = t.tn;
+        }
+        fileContent = fileContent.replace(reg, '$1:$2$3' + tn + '$3');
+    }
+    //console.log(fileContent);
     return fileContent;
 };
+processor.reset = () => {
+    globalContents = {};
+};
+processor.extractRules = extractRules;
+module.exports = processor;

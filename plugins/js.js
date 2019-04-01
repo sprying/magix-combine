@@ -1,5 +1,9 @@
+/*
+    总入口，因为模板、样式最终都依附在js文件中
+ */
 let path = require('path');
 let fs = require('fs');
+let chalk = require('chalk');
 let fd = require('./util-fd');
 let jsContent = require('./js-content');
 let deps = require('./util-deps');
@@ -11,21 +15,26 @@ let processFile = (from, to, inwatch) => { // d:\a\b.js  d:\c\d.js
         from = path.resolve(from);
         to = path.resolve(to);
         let promise = Promise.resolve();
-        if (inwatch && deps.inDependencies(from)) {
+        if (inwatch && deps.inDependents(from)) {
             promise = deps.runFileDepend(from);
         }
         if (fs.existsSync(from)) {
-            if (configs.compileFileExtNamesReg.test(from)) {
+            if (configs.jsFileExtNamesReg.test(from)) {
                 promise.then(() => {
                     return jsContent.process(from, to, 0, inwatch);
-                }).then((e) => {
-                    if (e.writeFile) {
-                        to = to.replace(configs.compileFileExtNamesReg, '.js');
-                        configs.beforeWriteFile(e);
+                }).then(e => {
+                    if (!e.isSnippet) {
+                        to = to.replace(configs.jsFileExtNamesReg, m => {
+                            if (m.length > 3 && m[1] === 'm') {
+                                return '.mjs';
+                            }
+                            return '.js';
+                        });
+                        configs.writeFileStart(e);
                         fd.write(to, e.content);
                     }
                     if (configs.log && inwatch) {
-                        slog.ever('finish:', from.green);
+                        slog.ever('[MXC Tip(js)] finish:', chalk.green(from));
                     }
                     resolve();
                 }).catch(reject);

@@ -59,7 +59,11 @@ declare module "magix-combine" {
          */
         cssTagsInFiles: {
             [tag: string]: string
-        }
+        },
+        /**
+         * 模块包名
+         */
+        pkgName: string
     }
     interface IRequireInfo {
         /**
@@ -70,6 +74,10 @@ declare module "magix-combine" {
          * require语句后面的信息，如;等
          */
         tail: string
+        /**
+         * 未经任何处理的原始模块id
+         */
+        originalDependedId: string
         /**
          * 依赖的id
          */
@@ -83,23 +91,134 @@ declare module "magix-combine" {
          */
         replacement?: string
     }
+    interface ICheckerConfig {
+        /**
+         * 样式
+         */
+        css: boolean
+        // /**
+        //  * 样式中的url
+        //  */
+        // cssUrl: boolean
+        // /**
+        //  * js循环
+        //  */
+        // jsLoop: boolean
+        // /**
+        //  * js接口服务
+        //  */
+        // jsService: boolean
+        /**
+         * js this别名
+         */
+        //jsThis: boolean
+
+        /**
+         * 模板命令语法检查
+         */
+        tmplCmdSyntax: boolean
+        /**
+         * 模板img属性
+         */
+        //tmplAttrImg: boolean
+        /**
+         * 不允许的标签
+         */
+        tmplDisallowedTag: boolean
+        /**
+         * 危险的属性
+         */
+        tmplAttrDangerous: boolean
+        /**
+         * 需要添加noopener
+         */
+        tmplAttrNoopener: boolean
+        /**
+         * 检测anchor类标签
+         */
+        tmplAttrAnchor: boolean
+        /**
+         * mx事件
+         */
+        tmplAttrMxEvent: boolean
+        /**
+         * mx view
+         */
+        tmplAttrMxView: boolean
+        /**
+         * 重复的属性
+         */
+        tmplDuplicateAttr: boolean
+        /**
+         * 模板中函数或for of检测
+         */
+        tmplCmdFnOrForOf: boolean
+        /**
+         * 标签配对
+         */
+        //tmplTagsMatch: boolean
+    }
+    /**
+     * 组件信息对象
+     */
+    interface IGMap {
+        /**
+         * 组件的路径
+         */
+        path: string
+        /**
+         * 生成组件时，使用的原生的html标签
+         */
+        tag: string
+    }
+    interface ICompileCssStart {
+        /**
+         * 扩展名
+         */
+        ext: string
+        /**
+         * 文件完整路径
+         */
+        file: string
+        /**
+        * css内容
+        */
+        content: string
+        /**
+         * 短文件名
+         */
+        shortFile: string
+    }
+    /**
+     * 读取css结果对象
+     */
+    interface ICompileCssResult {
+        /**
+         * 读取的样式文件是否存在
+         */
+        exists: boolean
+        /**
+         * 文件完整路径
+         */
+        file: string
+        /**
+         * css内容
+         */
+        content: string
+        /**
+         * source map
+         */
+        map: object
+    }
     interface IConfig {
-        /**
-         * 生成样式文件md5结果截取的长度，默认为2
-         */
-        md5CssFileLen?: number
-        /**
-         * 生成样式选择器时md5结果截取的长度。默认为2
-         */
-        md5CssSelectorLen?: number
         /**
          * 编译的模板目录。默认tmpl
          */
-        tmplFolder?: string
+        commonFolder?: string
         /**
          * 编译结果存储目录。默认src
          */
-        srcFolder?: string
+        compiledFolder?: string
         /**
          * 匹配模板中模板引擎语句的正则，对模板处理时，先去掉无关的内容处理起来会更准确
          */
@@ -107,59 +226,75 @@ declare module "magix-combine" {
         /**
          * cssnano压缩选项
          */
-        cssnanoOptions?: object
+        cssnano: object
         /**
          * less编译选项
          */
-        lessOptions?: object
+        less: object
         /**
          * sass编译选项
          */
-        sassOptions?: object
+        sass: object
         /**
-         * 生成样式选择器时的前缀，通常是项目名。默认为mx-
+         * 生成样式选择器时的前缀，通常是项目名。
          */
-        cssSelectorPrefix?: string
+        projectName?: string
+        /**
+         * 是否输出css sourcemap，默认false
+         */
+        //sourceMapCss?: boolean
+
+        /**
+         * 是否支持类似 import 'style.css'　导入样式的语法，默认false
+         */
+        importCssSyntax?: boolean
+
+        /**
+         * magix模块名称，默认magix
+         */
+        magixModuleIds?: [string]
+
+        /**
+         * 任务同时执行的并发数量，默认为1
+         */
+        concurrentTask: number
+        /**
+         * autprefixer配置
+         */
+        autoprefixer?: object
         /**
          * 加载器类型，该选项决定如何添加包装，如添加define函数。默认为cmd加载器
          */
-        loaderType?: string
+        loaderType?: "amd" | "amd_es" | "cmd" | "cmd_es" | "iife" | "iife_es" | "none" | "webpack" | "kissy" | "kissy_es" | "umd" | "umd_es" | "acmd" | "acmd_es"
         /**
          * html压缩选项
          */
-        htmlminifierOptions?: object
+        htmlminifier?: object
         /**
-         * 是否输出log信息。默认为true
+         * 是否输出日志信息。默认为true
          */
         log?: boolean
+
         /**
-         * 是否输出css中识别到的url及html中识别出的img的src。默认为true
+         * 编译成调试版本，默认false
          */
-        logUrl?: boolean
+        debug?: boolean
         /**
-         * 是否输出样式检测信息。默认为true
+         * 检测对象
          */
-        logCssChecker?: boolean
+        checker?: ICheckerConfig
         /**
-         * 是否压缩css内容。默认为true
+         * 是否把模板中的view打包到js中的文件依赖中，默认false。如果为true，渲染的view会在加载相应的js时提前加载，有效解决页面渲染时子view加载的闪烁问题
          */
-        compressCss?: boolean
-        /**
-         * 是否压缩css选择器名称。默认为false
-         */
-        compressCssSelectorNames?: boolean
+        tmplAddViewsToDependencies?: boolean
         /**
          * 是否增加事件前缀，开启该选项有利于提高magix查找vframe的效率。默认为true
          */
-        addEventPrefix?: boolean
+        tmplAddEventPrefix?: boolean
         /**
-         * 绑定表达式<%:expr%>绑定的事件。默认为["change"]
+         * 模板中静态节点分析，只有在magixUpdaterIncrease启用的情况下该配置项才生效，默认true
          */
-        bindEvents?: string[]
-        /**
-         * 绑定表达式<%:expr%>绑定的处理名称。默认为s\u0011e\u0011t
-         */
-        bindName?: string
+        tmplStaticAnalyze?: boolean
         /**
          * 项目中使用的全局样式，不建议使用该选项
          */
@@ -177,17 +312,26 @@ declare module "magix-combine" {
          */
         useAtPathConverter?: boolean
         /**
-         * 待编译的文件后缀，默认为["js","mx"]
+         * 待编译的文件后缀，默认为['js', 'mx', 'ts', 'jsx', 'es', 'tsx']
          */
-        compileFileExtNames?: string[]
+        jsFileExtNames?: string[]
+
         /**
-         * 待编译的模板文件后缀，默认为["html","mx"]
+         * mx-view　处理器
+         */
+        mxViewProcessor?: ({ path: string, pkgName: string }) => string
+        /**
+         * 待编译的模板文件后缀，默认为['html', 'haml', 'pug', 'jade', 'tpl']
          */
         tmplFileExtNames?: string[]
         /**
          * 模板中不会变的变量，减少不必要的子模板的分析输出
          */
-        tmplUnchangableVars?: object
+        tmplConstVars?: object
+        /**
+         * 是否使用类mustach模板，默认true
+         */
+        tmplArtEngine?: boolean
         /**
          * 模板中的全局变量，这些变量不会做scope处理
          */
@@ -195,7 +339,19 @@ declare module "magix-combine" {
         /**
          * 模板输出时是否输出识别到的事件列表，默认为false
          */
-        outputTmplWithEvents?: boolean
+        tmplOutputWithEvents?: boolean
+        /**
+         * 是否启用增量更新，即dom diff
+         */
+        magixUpdaterIncrement?: boolean
+        /**
+         * 是否启用双向绑定时生成唯一一个mxe属性，默认true
+         */
+        magixUpdaterBindExpression?: boolean
+        /**
+         * 是否启用quick模板
+         */
+        magixUpdaterQuick?: boolean
         /**
          * 是否禁用magix view中的updater，该选项影响模板对象的输出，默认为false
          */
@@ -205,25 +361,38 @@ declare module "magix-combine" {
          */
         tmplPadCallArguments?: (name: string) => string
         /**
-         * 开始处理内容前调用
-         */
-        beforeProcessContent?: (content: string, from?: string) => string
-        /**
          * 编译文件被写入硬盘时调用
          */
-        beforeWriteFile?: (e: ICombineResult) => void
+        writeFileStart?: (e: ICombineResult) => void
         /**
          * 开始编译某个js文件之前的处理器，可以加入一些处理，比如typescript的预处理
          */
-        compileBeforeProcessor?: (content: string, from?: string) => Promise<string> | string
+        compileJSStart?: (content: string, e: ICombineResult) => string | Promise<ICombineResult> | Promise<string>
         /**
          * 结束编译时的处理器
          */
-        compileAfterProcessor?: (e: ICombineResult) => ICombineResult | Promise<ICombineResult>
+        compileJSEnd?: (content: string, e: ICombineResult) => string | Promise<ICombineResult> | Promise<string>
         /**
-         * 对mx-tag这样的标签做加工处理
+         * 开始编译css前处理器
          */
-        mxTagProcessor?: (tmpl: string, e?: ICombineResult) => string
+        compileCSSStart?: (css: string, e: ICompileCssStart) => Promise<string> | string
+        /**
+         * 结束编译css时的处理器
+         */
+        compileCSSEnd?: (css: string, e: ICompileCssResult) => Promise<string> | string
+        /**
+         * 对自定义标签做加工处理
+         */
+        customTagProcessor?: (tmpl: string, e?: ICombineResult) => string
+        /**
+         * 检测js代码中循环嵌套的层数，当超过该值时，输出提示，默认4层。合理的数据结构可以减少循环的嵌套，有效的提升性能
+         */
+        jsLoopDepth?: number
+
+        /**
+         * 组件配置对象
+         */
+        galleries?: object
         /**
          * 对模板中的标签做处理
          */
@@ -233,17 +402,24 @@ declare module "magix-combine" {
          */
         cssNamesProcessor?: (tmpl: string, cssNamesMap?: object) => string
         /**
-         * 压缩模板中的命令字符串
+         * 转换模板中的命令字符串
          */
-        compressTmplCommand?: (tmpl: string) => string
+        compileTmplCommand?: (tmpl: string, config: IConfig) => string
         /**
-         * 对css中匹配到的url做处理
+         * 开始转换模板
          */
-        cssUrlMatched?: (url: string) => string
+        compileTmplStart?: (tmpl: string) => string
         /**
-         * 对模板中img标签src的url做处理
+         * 结束转换模板
          */
-        tmplImgSrcMatched?: (url: string) => string
+        compileTmplEnd?: (tmpl: string) => string
+
+        /**
+         * 处理样式内容
+         */
+        cssConentProcessor?: (content: string, shortName: string, e: ICombineResult) => Promise<string>
+
+        applyStyleProcessor?: () => string
         /**
          * 加工处理模块id
          */
@@ -258,7 +434,7 @@ declare module "magix-combine" {
      * 配置打包编译参数
      * @param cfg 配置对象
      */
-    function config(cfg: IConfig): void
+    function config(cfg: IConfig): IConfig
     /**
      * 遍历文件夹及子、孙文件夹下的文件
      * @param folder 文件夹
@@ -266,6 +442,12 @@ declare module "magix-combine" {
      */
     function walk(folder: string, callback: (file: string) => void): void
 
+    /**
+     * 读取文件内容
+     * @param file 文件路径
+     * @param original 是否二进制数据
+     */
+    function readFile<T>(file: string, original: boolean): T
     /**
      * 复制文件，当复制到的路径中文件夹不存在时，会自动创建文件夹
      * @param from 源文件位置
@@ -308,4 +490,15 @@ declare module "magix-combine" {
      * 处理tmpl文件夹中的模板文件，通常向节点添加spm等属性
      */
     function processTmpl(): Promise<void>
+    /**
+     * 移除某个文件的缓存，在下次编译的时候重新编译该文件
+     * @param file 文件路径
+     */
+    function removeCache(file: string): void
+
+    /**
+     * 获取依赖当前文件的其它文件
+     * @param file 文件路径
+     */
+    function getFileDependents(file: string): object
 }

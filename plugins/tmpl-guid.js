@@ -1,42 +1,49 @@
+/*
+    给标签加上guid，用于局部刷新时的节点查找
+ */
 let tmplCmd = require('./tmpl-cmd');
+//let regexp = require('./util-rcache');
+let tmplParser = require('./tmpl-parser');
 //模板，增加guid标识，仅针对magix-updater使用：https://github.com/thx/magix-updater
 let tagReg = /<([^>\s\/]+)([^>]*?)(\/)?>/g;
 //let keysTagReg = /<([\w]+)([^>]*?)mx-keys\s*=\s*"[^"]+"([^>]*?)>/g;
 let holder = '\u001f';
-let slashReg = /\//g;
+//let slashReg = /\//g;
 let tmplCommandAnchorRegTest = /\u0007\d+\u0007/;
-let subReg = (() => {
-    let temp = '<([^>\\s\\/]+)([^>]*?)>(#)</\\1>';
-    let start = 12; //嵌套12层在同一个view中也足够了
-    while (start--) {
-        temp = temp.replace('#', '(?:<\\1[^>]*>#</\\1>|[\\s\\S])*?');
-    }
-    temp = temp.replace('#', '[\\s\\S]*?');
-    return new RegExp(temp, 'ig');
-})();
-let subRegWithGuid = (() => {
-    let temp = '<([^>\\s\\/]+)(\\s+mx-guid="g[^"]+")([^>]*?)>(#)</\\1>';
-    let start = 12; //嵌套12层在同一个view中也足够了
-    while (start--) {
-        temp = temp.replace('#', '(?:<\\1[^>]*>#</\\1>|[\\s\\S])*?');
-    }
-    temp = temp.replace('#', '[\\s\\S]*?');
-    return new RegExp(temp, 'ig');
-})();
-let selfCloseTagWithGuid = /<([^>\s\/]+)(\s+mx-guid="g[^"]+")([^>]*?)\/>/g;
-let selfCloseTag = /<[^>\s\/]+[^>]*?\/>/g;
-let emptyTag = /<(?:area|base|basefont|br|col|embed|frame|hr|img|input|isindex|keygen|link|meta|param|source|track|wbr)[^>]*?>/gi;
+let mxViewAttrReg = /\bmx-view\b=(['"])[\s\S]+?\1/;
+//let subReg = (() => {
+//    let temp = '<([^>\\s\\/]+)([^>]*?)>(#)</\\1>';
+//    let start = 5; //嵌套9层在同一个view中也足够了
+//    while (start--) {
+//        temp = temp.replace('#', '(?:<\\1[^>]*>#</\\1>|[\\s\\S])*?');
+//    }
+//    temp = temp.replace('#', '[\\s\\S]*?');
+//    return regexp.get(temp, 'ig');
+//})();
+//let subRegWithGuid = (() => {
+//    let temp = '<([^>\\s\\/]+)(\\s+mx-guid="g[^"]+")([^>]*?)>(#)</\\1>';
+//    let start = 5; //嵌套12层在同一个view中也足够了
+//    while (start--) {
+//        temp = temp.replace('#', '(?:<\\1[^>]*>#</\\1>|[\\s\\S])*?');
+//    }
+//    temp = temp.replace('#', '[\\s\\S]*?');
+//    return regexp.get(temp, 'ig');
+//})();
+let guidReg = /\s+mx-guid="g[^"]+"/g;
+//let selfCloseTagWithGuid = /<([^>\s\/]+)(\s+mx-guid="g[^"]+")([^>]*?)\/>/g;
+//let selfCloseTag = /<[^>\s\/]+[^>]*?\/>/g;
+//let emptyTag = /<(?:area|base|basefont|br|col|embed|frame|hr|img|input|isindex|keygen|link|meta|param|source|track|wbr)[^>]*?>/gi;
 //let guidReg = /\s+mx-guid="g[^"]+"/g;
 let vdReg = /\u0002(\w+)\b/g;
 let idReg = /\u0001(\w+)\b/g;
-let globalRegTest = /\u0003/;
+let globalRegTest = /[\u0003\u0001]/;
 let vdMatchId = (tmpl, tmplCommands) => {
     let c = tmplCmd.recover(tmpl, tmplCommands);
     if (!globalRegTest.test(c)) { //不存在全局的变量，不用局部刷新
         return false;
     }
-    let vds = {};
-    let ids = {};
+    let vds = Object.create(null);
+    let ids = Object.create(null);
     c.replace(vdReg, (m, key) => { //变量声明
         vds[key] = 1;
     });
@@ -54,10 +61,66 @@ let vdMatchId = (tmpl, tmplCommands) => {
     }
     return true;
 };
+let getContentExceptTags = (tmpl, nodes) => {
+    for (let i = nodes.length; i--;) {
+        let t = nodes[i];
+        tmpl = tmpl.substring(0, t.start) + tmpl.substring(t.end);
+    }
+    return tmpl;
+};
+let getContentWithoutGuid = (n, tmpl) => {
+    let removed = [{
+        start: 0,
+        end: n.contentStart
+    }, {
+        start: n.contentEnd,
+        end: tmpl.length
+    }];
+    let walk = nodes => {
+        if (nodes) {
+            for (let n of nodes) {
+                if (n.guid) {
+                    removed.push(n);
+                } else {
+                    walk(n.children);
+                }
+            }
+        }
+    };
+    walk(n.children);
+    removed = removed.sort((a, b) => {
+        return b.start - a.start;
+    });
+    for (let r of removed) {
+        tmpl = tmpl.substring(0, r.start) + tmpl.substring(r.end);
+    }
+    return tmpl;
+};
+let collectGuids = (nodes, removedGuids) => { //移除某个节点下的所有guid，用于mx-view这样的节点，子节点不能有guid
+    if (nodes) {
+        for (let n of nodes) {
+            collectGuids(n.children, removedGuids);
+            if (n.guid) {
+                removedGuids.push(n.guid);
+                delete n.guid;
+            }
+        }
+    }
+};
 module.exports = {
-    add(tmpl, tmplCommands, refLealGlobal) {
+    add(tmpl, tmplCommands, refLealGlobal, e) {
         let g = 0;
-        let r = tmpl.replace(selfCloseTag, '').replace(subReg, '');
+        let tokens = tmplParser(tmpl, e.shortHTMLFile);
+        //let r = tmpl.replace(selfCloseTag, '').replace(subReg, '');
+        let r = getContentExceptTags(tmpl, tokens);
+
+        //tmpl = tmpl.replace(emptyTag, match => {
+        //    let content = match.slice(0, -1).trim();
+        //    if (content.charAt(content.length - 1) != '/') {
+        //        return content + '/>';
+        //    }
+        //    return match;
+        //});
         if (tmplCommandAnchorRegTest.test(r)) {
             let cmd = tmplCmd.recover(r, tmplCommands);
             let addWrapper = globalRegTest.test(cmd) || vdReg.test(cmd);
@@ -66,28 +129,60 @@ module.exports = {
             }
         }
         tmpl = tmpl.replace(tagReg, (match, tag, attrs, close, tKey) => {
-            if (close && !tmplCommandAnchorRegTest.test(match)) {
-                tKey = '';
-            } else {
-                tKey = ' mx-guid="g' + (g++).toString(16) + holder + '"';
-            }
+            //if (close && !tmplCommandAnchorRegTest.test(match)) {
+            //    tKey = '';
+            //} else {
+            tKey = ' mx-guid="g' + (g++).toString(16) + holder + '"';
+            //}
             return '<' + tag + tKey + attrs + (close ? close : '') + '>';
         });
-        tmpl = tmpl.replace(emptyTag, (match) => {
-            let content = match.slice(0, -1).trim();
-            if (content.charAt(content.length - 1) != '/') {
-                return content + '/>';
-            }
-            return match;
-        });
-
-        g = 0;
-        let removeGuid = (tmpl) => {
+        //console.log(tmpl);
+        tokens = tmplParser(tmpl, e.shortHTMLFile);
+        let getRemovedGuids = (tmpl) => {
             //如果移除子节点后无模板命令和属性中的模板命令，则移除guid
             //如果剩余内容+属性配对，则保留guid
             //如果剩余内容+属性不配对，则删除guid
-            //console.log('removeGuids',tmpl);
-            tmpl = tmpl.replace(selfCloseTagWithGuid, (match, tag, guid, attrs) => {
+            let removedGuids = [];
+            let walk = nodes => {
+                for (let n of nodes) {
+                    let attrs = n.hasAttrs ? tmpl.substring(n.attrsStart, n.attrsEnd) : '';
+                    if (n.hasContent) {
+                        if (n.children) {
+                            walk(n.children);
+                        }
+                        let content;
+                        let special = n.tag == 'textarea';
+                        if (!special) {
+                            let mxViewAttr = attrs.match(mxViewAttrReg);
+                            if (mxViewAttr) { //mx-view中有全局变量
+                                mxViewAttr = tmplCmd.recover(mxViewAttr[0], tmplCommands);
+                                special = globalRegTest.test(mxViewAttr) && !n.hasSubView;
+                            }
+                        }
+                        if (special) { //mx-view特殊处理
+                            collectGuids(n.children, removedGuids); //子节点不能有guid
+                            content = tmpl.substring(n.contentStart, n.contentEnd);
+                        } else {
+                            //获取所有除了guid之外的节点内容
+                            content = getContentWithoutGuid(n, tmpl);
+                        }
+                        if (!tmplCommandAnchorRegTest.test(content + attrs) || !vdMatchId(attrs + content, tmplCommands)) {
+                            removedGuids.push(n.guid);
+                            delete n.guid;
+                        }
+                    } else {
+                        if (!tmplCommandAnchorRegTest.test(attrs) ||
+                            !vdMatchId(attrs, tmplCommands)) {
+                            removedGuids.push(n.guid);
+                            delete n.guid;
+                        }
+                    }
+                }
+            };
+            walk(tokens);
+            return removedGuids;
+
+            /*tmpl = tmpl.replace(selfCloseTagWithGuid, (match, tag, guid, attrs) => {
                 //console.log(attrs,tmplCommandAnchorRegTest.test(attrs) , vdMatchId(attrs, tmplCommands));
                 if (tmplCommandAnchorRegTest.test(attrs) && vdMatchId(attrs, tmplCommands)) {
                     guid = ' mx-guid="g' + (g++).toString(16) + holder + '"';
@@ -97,17 +192,17 @@ module.exports = {
             });
             //console.log('tt',tmpl);
             tmpl = tmpl.replace(subRegWithGuid, (match, tag, guid, attrs, content) => {
-                //console.log(attrs);
                 //attrs = attrs.replace(/\//g, '\u0004');
-                content = removeGuid(content); //递归删除节点中的无用guid
+                //如果属性中有mx-view属性，则子节点不能独立的去局部刷新
+                content = removeGuid(content, mxViewAttrReg.test(attrs)); //递归删除节点中的无用guid
                 let tContent = content.replace(selfCloseTagWithGuid, '').replace(subRegWithGuid, ''); //tContent只有内容,不包含子节点
                 if (tmplCommandAnchorRegTest.test(tContent + attrs) && vdMatchId(attrs + tContent, tmplCommands)) { //当前节点内容和属性中的变量匹配
                     ///console.log(attrs,tContent);
-                    attrs = attrs.replace(slashReg, '\u0004'); //把/换掉，防止在子模板分析中分析自闭合标签时不准确
+                    //attrs = attrs.replace(slashReg, '\u0004'); //把/换掉，防止在子模板分析中分析自闭合标签时不准确
                     //console.log('origin content',content,'---',tContent);
                     // let removeGuids = tContent.match(guidReg);
                     // if (removeGuids) {
-                    //     removeGuids.forEach((g) => {
+                    //     removeGuids.forEach(g => {
                     //         content = content.replace(g, '');
                     //     });
                     // }
@@ -124,15 +219,25 @@ module.exports = {
                 //}
                 return '<' + tag + attrs + '>' + content + '</' + tag + '>';
             });
-            return tmpl;
+            return tmpl;*/
         };
-        tmpl = removeGuid(tmpl);
-        let checkTmpl = tmpl.replace(selfCloseTagWithGuid, '').replace(subRegWithGuid, '');
+        let removedGuids = getRemovedGuids(tmpl);
+        let checkTmpl = getContentWithoutGuid({
+            children: tokens
+        }, tmpl);
+        for (let g of removedGuids) {
+            tmpl = tmpl.replace(' mx-guid="' + g + '"', '');
+        }
+        g = 0;
+        //重建guid
+        tmpl = tmpl.replace(guidReg, () => {
+            return ' mx-guid="g' + (g++).toString(16) + holder + '"';
+        });
         checkTmpl = tmplCmd.recover(checkTmpl, tmplCommands);
         if (refLealGlobal) {
             refLealGlobal.exists = globalRegTest.test(checkTmpl);
         }
-
+        //console.log(tmpl);
         //console.log(tmpl,tmplCommands);
         return tmpl;
     }

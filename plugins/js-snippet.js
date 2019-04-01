@@ -1,51 +1,59 @@
+/*
+    处理代码片断，如'top@./list.js'，用于手动合并一些代码
+ */
 let deps = require('./util-deps');
 let configs = require('./util-config');
 let path = require('path');
+let checker = require('./checker');
 let fs = require('fs');
 let sep = path.sep;
-let fileReg = /(['"])\u0012@([^'"]+)\.([a-z]{2,})\1;?/g;
-let cssChecker = require('./css-checker');
-module.exports = (e) => {
+let fileReg = /(['"`])([a-z,]+)?\u0012@([^'"`]+)\.([a-z]{2,})\1;?/g;
+module.exports = e => {
     return new Promise((resolve, reject) => {
-        let contentCache = {},
+        let contentCache = Object.create(null),
             count = 0,
             resumed = false;
         let resume = () => {
             if (!resumed) {
                 resumed = true;
-                e.content = e.content.replace(fileReg, (m) => {
-                    return contentCache[m] || m;
-                });
+                e.content = e.content.replace(fileReg, m => contentCache[m]);
                 resolve(e);
             }
         };
-        let readFile = (key, file) => {
+        let readFile = (key, file, ctrl) => {
             count++;
-            let to = path.resolve(configs.srcFolder + file.replace(configs.moduleIdRemovedPath, ''));
-            if (fs.existsSync(file)) {
-                e.processContent(file, to, '', false).then((info) => {
-                    contentCache[key] = info.content;
+            let to = path.resolve(configs.compiledFolder + file.replace(configs.moduleIdRemovedPath, ''));
+            fs.access(file, (fs.constants ? fs.constants.R_OK : fs.R_OK), err => {
+                if (err) {
+                    checker.CSS.markUnexists(file, e.from);
+                    contentCache[key] = '(()=>{throw new Error("unfound:' + file + '")})()';
                     count--;
                     if (!count) {
                         resume();
                     }
-                }).catch(reject);
-            } else {
-                cssChecker.markUnexists(file, e.from);
-                contentCache[key] = 'throw new Error("unfound:' + file + '");';
-                count--;
-                if (!count) {
-                    resume();
+                } else {
+                    let ctrls = ctrl.split(',');
+                    let c = {};
+                    for (let r of ctrls) {
+                        c[r] = true;
+                    }
+                    e.processContent(file, to, '', false, c).then(info => {
+                        contentCache[key] = info.content;
+                        count--;
+                        if (!count) {
+                            resume();
+                        }
+                    }).catch(reject);
                 }
-            }
+            });
         };
         let tasks = [];
-        e.content.replace(fileReg, (m, q, name, ext) => {
+        e.content.replace(fileReg, (m, q, ctrl, name, ext) => {
             let file = path.resolve(path.dirname(e.from) + sep + name + '.' + ext);
             if (e.from && e.to) {
                 deps.addFileDepend(file, e.from, e.to);
             }
-            tasks.push([m, file]);
+            tasks.push([m, file, ctrl || '']);
         });
         if (tasks.length) {
             let i = 0;
